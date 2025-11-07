@@ -22,7 +22,7 @@ export default function SetupScreen() {
   const scaleAnim = React.useRef(new Animated.Value(1)).current;
 
   const handleSetupDozemate = () => {
-    router.push('/(bluetooth)/BluetoothScan');
+    router.push('/(bluetooth)/ScanScreen');
   };
 
   const handleBuyDozemate = () => {
