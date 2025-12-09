@@ -38,7 +38,10 @@ export default function SignupResult() {
           <>
             <Ionicons name="checkmark-circle" size={88} color="#22c55e" style={{ marginBottom: 10 }} />
             <Text style={styles.title}>Account created</Text>
-            <Text style={styles.subtitle}>Please login to continue.</Text>
+            <Text style={styles.subtitle}>A verification email has been sent to your email address.</Text>
+            <Text style={styles.verificationText}>
+              Please check your email and click the verification link to activate your account before logging in.
+            </Text>
 
             <TouchableOpacity
               style={styles.primaryBtn}
@@ -69,6 +72,7 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 22, fontWeight: '800', color: '#fff', marginTop: 8, textAlign: 'center' },
   subtitle: { fontSize: 14, color: 'rgba(255,255,255,0.8)', textAlign: 'center', marginTop: 2 },
+  verificationText: { fontSize: 12, color: 'rgba(255,255,255,0.7)', textAlign: 'center', marginTop: 8, paddingHorizontal: 16 },
   primaryBtn: {
     marginTop: 16,
     backgroundColor: '#fff',

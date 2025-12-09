@@ -70,9 +70,9 @@ export default function ConnectScreen() {
   // Keep a ref of current status to avoid stale closures in intervals
   const statusRef = useRef<ProvisioningStatus>(ProvisioningStatus.IDLE);
 
-  // Service and characteristic UUIDs (matching Nordic firmware)
-  const PROVISION_SERVICE_UUID = "5678DEF0-5678-1234-1234-56789ABC0000";
-  const STATUS_CHAR_UUID = "5678DEF2-5678-1234-1234-56789ABC0000";
+  // Service and characteristic UUIDs (matching Nordic UART Service)
+  const PROVISION_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
+  const STATUS_CHAR_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  // TX characteristic for status updates
 
   // Pulse animation for loading indicator
   useEffect(() => {

@@ -62,8 +62,14 @@ export default function ScanScreen() {
   const appState = useRef(AppState.currentState);
 
   // Filter devices containing "doze" (case-insensitive)
+  // COMMENTED OUT: Now showing all devices instead of filtering by "doze"
+  // const filteredDevices = useMemo(() => {
+  //   return scannedDevices.filter(d => d.name && d.name.toLowerCase().includes("doze"));
+  // }, [scannedDevices]);
+  
+  // Show all scanned devices without filtering
   const filteredDevices = useMemo(() => {
-    return scannedDevices.filter(d => d.name && d.name.toLowerCase().includes("doze"));
+    return scannedDevices;
   }, [scannedDevices]);
 
   // Get available device IDs

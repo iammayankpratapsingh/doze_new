@@ -9,9 +9,8 @@ import {
   Dimensions,
   Image,
   Animated,
-  LayoutAnimation,
-  Platform,
-  UIManager,
+  RefreshControl,
+  InteractionManager,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
@@ -20,11 +19,15 @@ import Svg from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Modal } from 'react-native';
 import { useAuth } from '@/contexts/AuthContext';
+import { useDevice } from '@/contexts/DeviceContext';
 import { useRouter } from 'expo-router';
+import { getHealthData, getHistoricalData } from '@/services/deviceData';
+import { connectMQTT, disconnectMQTT, setupMQTTMessageHandler, isMQTTConnected } from '@/services/mqttService';
+import type { MqttClient } from 'mqtt';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const RNSvg = require('react-native-svg');
-const { Circle, Path } = RNSvg as { Circle: any; Path: any };
+const { Circle, Path, Rect } = RNSvg as { Circle: any; Path: any; Rect: any };
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 const { width } = Dimensions.get('window');
@@ -84,15 +87,93 @@ function genSparklinePoints(widthPx = 120, heightPx = 28, count = 10, min = 0, m
   return { svgPoints: points.join(' '), raw: values };
 }
 
+// Mini bar chart component for Sleep card - simple white bars with varying heights
+function MiniSleepChart({ width = 120, height = 32 }: { width?: number; height?: number }) {
+  const barWidth = 10;
+  const barSpacing = 6;
+  const chartPadding = 4;
+  const availableHeight = height - chartPadding * 2;
+  
+  // Varying bar heights to show it's a bar chart (up and down pattern)
+  const barHeights = [0.85, 0.45, 0.70, 0.35, 0.90, 0.55, 0.65]; // percentages of available height
+
+  return (
+    <RNSvg.Svg width={width} height={height}>
+      {barHeights.map((heightPercent, barIndex) => {
+        const barX = chartPadding + barIndex * (barWidth + barSpacing);
+        const barHeight = availableHeight * heightPercent;
+        const barY = chartPadding + availableHeight - barHeight;
+
+        return (
+          <Rect
+            key={`mini-bar-${barIndex}`}
+            x={barX}
+            y={barY}
+            width={barWidth}
+            height={barHeight}
+            fill="rgba(255,255,255,0.9)"
+            rx={2}
+            ry={2}
+          />
+        );
+      })}
+    </RNSvg.Svg>
+  );
+}
+
+// Mini bar chart component for Stress card - simple white bars with varying heights
+function MiniStressChart({ width = 120, height = 32 }: { width?: number; height?: number }) {
+  const barWidth = 10;
+  const barSpacing = 6;
+  const chartPadding = 4;
+  const availableHeight = height - chartPadding * 2;
+  
+  // Varying bar heights to show it's a bar chart (up and down pattern)
+  const barHeights = [0.60, 0.45, 0.70, 0.50, 0.65, 0.55, 0.75]; // percentages of available height
+
+  return (
+    <RNSvg.Svg width={width} height={height}>
+      {barHeights.map((heightPercent, barIndex) => {
+        const barX = chartPadding + barIndex * (barWidth + barSpacing);
+        const barHeight = availableHeight * heightPercent;
+        const barY = chartPadding + availableHeight - barHeight;
+
+        return (
+          <Rect
+            key={`mini-stress-bar-${barIndex}`}
+            x={barX}
+            y={barY}
+            width={barWidth}
+            height={barHeight}
+            fill="rgba(255,255,255,0.9)"
+            rx={2}
+            ry={2}
+          />
+        );
+      })}
+    </RNSvg.Svg>
+  );
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { auth } = useAuth();
+  const { activeDevice } = useDevice();
   const router = useRouter();
   const [sleepDate, setSleepDate] = React.useState(MOCK_SLEEP.date);
   const [isDatePickerVisible, setDatePickerVisible] = React.useState(false);
   const [displayScore, setDisplayScore] = React.useState(0);
   const [isSwitcherOpen, setSwitcherOpen] = React.useState(false);
-  const [isEnvExpanded, setEnvExpanded] = React.useState(false);
+  
+  // Real device data state
+  const [latestHealthData, setLatestHealthData] = React.useState<any>(null);
+  const [historicalData, setHistoricalData] = React.useState<any[]>([]);
+  const [isLoadingData, setIsLoadingData] = React.useState(false);
+  const [lastUpdateTime, setLastUpdateTime] = React.useState<Date | null>(null);
+  const [mqttClient, setMqttClient] = React.useState<MqttClient | null>(null);
+  const [useMQTT, setUseMQTT] = React.useState(true); // Enable MQTT by default (like website)
+  // Force update counter to ensure React Native detects changes
+  const [updateCounter, setUpdateCounter] = React.useState(0);
 
   const carouselRef = React.useRef<ScrollView | null>(null);
   const loopData = React.useMemo(() => {
@@ -102,6 +183,177 @@ export default function HomeScreen() {
   }, []);
   const [carouselIndex, setCarouselIndex] = React.useState(1);
   const autoplayRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Fetch device data (for initial load and fallback)
+  const fetchDeviceData = React.useCallback(async () => {
+    if (!activeDevice?.deviceId || !auth.isLoggedIn) {
+      return;
+    }
+
+    try {
+      setIsLoadingData(true);
+      
+      // Fetch latest health data
+      const healthResult = await getHealthData(activeDevice.deviceId, { limit: 1 });
+      if (healthResult.success && healthResult.data && healthResult.data.length > 0) {
+        setLatestHealthData(healthResult.data[0]);
+        setLastUpdateTime(new Date());
+      }
+
+      // Fetch historical data for charts
+      const historyResult = await getHistoricalData(activeDevice.deviceId, '24h');
+      if (historyResult.success && historyResult.data) {
+        setHistoricalData(historyResult.data);
+      }
+    } catch (error) {
+      console.error('Failed to fetch device data:', error);
+    } finally {
+      setIsLoadingData(false);
+    }
+  }, [activeDevice?.deviceId, auth.isLoggedIn]);
+
+  // Setup MQTT connection (same as website)
+  React.useEffect(() => {
+    if (!activeDevice?.deviceId || !auth.isLoggedIn || !useMQTT) {
+      return;
+    }
+
+    console.log('[Home] Setting up MQTT connection for device:', activeDevice.deviceId);
+    
+    // Setup message handler FIRST (before connection) to ensure we catch all messages
+    // This ensures React detects state changes even when values are similar
+    const messageHandler = (data: any) => {
+      const timestamp = new Date().toLocaleTimeString('en-IN', { hour12: false });
+      console.log(`[${timestamp}] 📱 APP: 🌡️${data.temperature || data.temp || 'N/A'}°C | ❤️${data.heartRate || data.hr || 'N/A'}BPM | 🌬️${data.respiration || data.resp || 'N/A'}RPM | 😰${data.stress || 'N/A'} | 💧${data.humidity || 'N/A'}%`);
+      
+      // CRITICAL: Update state immediately for real-time updates
+      // React Native will batch these updates automatically
+      // Use functional state update (like website) to ensure React detects changes
+      // Force update by always creating a new object with current timestamp
+      const updateTimestamp = new Date();
+      const updateKey = Date.now(); // Unique key for each update
+      
+      // CRITICAL: Update state in a way that React Native will definitely detect
+      // Use functional update to ensure we always have latest previous values
+      setLatestHealthData((prev: any) => {
+        // Create a completely new object with all fields to ensure reference change
+        const newHealthData = {
+          // Core health metrics (handle both formats: temp/hr/resp and temperature/heartRate/respiration)
+          temperature: data.temperature !== undefined ? data.temperature : 
+                       (data.temp !== undefined ? data.temp : (prev?.temperature ?? 0)),
+          heartRate: data.heartRate !== undefined ? data.heartRate : 
+                     (data.hr !== undefined ? data.hr : (prev?.heartRate ?? 0)),
+          respiration: data.respiration !== undefined ? data.respiration : 
+                       (data.resp !== undefined ? data.resp : (prev?.respiration ?? 0)),
+          stress: data.stress !== undefined ? data.stress : (prev?.stress ?? 0),
+          hrv: data.hrv !== undefined ? data.hrv : (prev?.hrv ?? 0),
+          
+          // Environment metrics
+          humidity: data.humidity !== undefined ? data.humidity : (prev?.humidity ?? 0),
+          iaq: data.iaq !== undefined ? data.iaq : (prev?.iaq ?? 0),
+          eco2: data.eco2 !== undefined ? data.eco2 : (prev?.eco2 ?? 0),
+          tvoc: data.tvoc !== undefined ? data.tvoc : (prev?.tvoc ?? 0),
+          etoh: data.etoh !== undefined ? data.etoh : (prev?.etoh ?? 0),
+          
+          // Additional fields - create new objects to ensure reference change
+          metrics: data.metrics ? { ...data.metrics } : (prev?.metrics ? { ...prev.metrics } : {}),
+          signals: data.signals ? { ...data.signals } : (prev?.signals ? { ...prev.signals } : {}),
+          raw: data.raw ? { ...data.raw } : (prev?.raw ? { ...prev.raw } : {}),
+          timestamp: updateTimestamp, // Always use new timestamp to force update
+          _updateKey: updateKey, // Force React to detect change
+        };
+        
+        // UI update confirmation
+        console.log(`[${timestamp}] ✅ UI Updated: HR=${newHealthData.heartRate || 'N/A'}, Resp=${newHealthData.respiration || 'N/A'}, Temp=${newHealthData.temperature || 'N/A'}`);
+        
+        // Always return a new object to ensure React Native detects the change
+        return newHealthData;
+      });
+      
+      // Update timestamp separately to trigger re-render (this is a separate state that always changes)
+      setLastUpdateTime(updateTimestamp);
+      
+      // Force update counter to ensure useMemo recomputes
+      setUpdateCounter(prev => prev + 1);
+      
+      // Update historical data array (keep last 100 points for charts)
+      setHistoricalData((prev) => {
+        const newDataPoint = {
+          temperature: data.temperature ?? data.temp ?? 0,
+          heartRate: data.heartRate ?? data.hr ?? 0,
+          respiration: data.respiration ?? data.resp ?? 0,
+          stress: data.stress ?? 0,
+          hrv: data.hrv ?? 0,
+          humidity: data.humidity ?? 0,
+          iaq: data.iaq ?? 0,
+          eco2: data.eco2 ?? 0,
+          tvoc: data.tvoc ?? 0,
+          etoh: data.etoh ?? 0,
+          timestamp: data.timestamp || new Date(),
+        };
+        const newData = [...prev, newDataPoint];
+        return newData.slice(-100);
+      });
+    };
+
+    // Connect to MQTT broker (this will also set up the message handler)
+    const client = connectMQTT(activeDevice.deviceId);
+    
+    if (!client) {
+      console.warn('[Home] Failed to create MQTT client, falling back to HTTP polling');
+      setUseMQTT(false);
+      return;
+    }
+
+    setMqttClient(client);
+
+    // Setup message handler - attach it BEFORE connection completes
+    // This ensures we catch messages as soon as they arrive
+    setupMQTTMessageHandler(client, messageHandler);
+
+    // Monitor connection status
+    const checkConnection = setInterval(() => {
+      if (client) {
+        const isConnected = client.connected;
+        console.log('[Home] MQTT connection status:', isConnected ? '🟢 Connected' : '🔴 Disconnected');
+        if (!isConnected) {
+          console.warn('[Home] MQTT disconnected, will attempt reconnect');
+        }
+      }
+    }, 5000);
+
+    // Initial fetch for historical data
+    fetchDeviceData();
+
+    // Cleanup on unmount or device change
+    return () => {
+      console.log('[Home] Cleaning up MQTT connection');
+      clearInterval(checkConnection);
+      disconnectMQTT();
+      setMqttClient(null);
+    };
+  }, [activeDevice?.deviceId, auth.isLoggedIn, useMQTT]);
+
+  // Fallback: HTTP polling if MQTT is disabled or fails
+  React.useEffect(() => {
+    if (!useMQTT || mqttClient) {
+      return; // Don't poll if MQTT is active
+    }
+
+    if (!activeDevice?.deviceId || !auth.isLoggedIn) {
+      return;
+    }
+
+    console.log('[Home] Using HTTP polling fallback');
+    fetchDeviceData();
+    
+    // Poll for updates every 30 seconds (fallback mode)
+    const pollInterval = setInterval(() => {
+      fetchDeviceData();
+    }, 30000);
+
+    return () => clearInterval(pollInterval);
+  }, [fetchDeviceData, useMQTT, mqttClient, activeDevice?.deviceId, auth.isLoggedIn]);
 
   React.useEffect(() => {
     requestAnimationFrame(() => {
@@ -120,12 +372,6 @@ export default function HomeScreen() {
     };
   }, []);
 
-  React.useEffect(() => {
-    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
-      UIManager.setLayoutAnimationEnabledExperimental(true);
-    }
-  }, []);
-
   const formattedDate = React.useMemo(() => {
     const d = sleepDate;
     const today = new Date();
@@ -136,15 +382,84 @@ export default function HomeScreen() {
   const progressAnim = React.useRef(new Animated.Value(0)).current;
   const scoreAnim = React.useRef(new Animated.Value(0)).current;
 
+  // Calculate sleep score from latest data (if available)
+  const sleepScore = React.useMemo(() => {
+    if (!latestHealthData) return MOCK_SLEEP.score;
+    
+    // First, try to use SleepQuality from metrics if available (backend provides this)
+    const sleepQuality = latestHealthData.metrics?.SleepQuality;
+    if (sleepQuality !== undefined && sleepQuality !== null && sleepQuality > 0) {
+      return Math.round(Math.max(0, Math.min(100, sleepQuality)));
+    }
+    
+    // Fallback: Calculate based on multiple factors
+    const hr = latestHealthData.heartRate || 0;
+    const resp = latestHealthData.respiration || 0;
+    const stress = latestHealthData.stress || 0;
+    const hrv = latestHealthData.hrv || 0;
+    
+    if (hr === 0 || resp === 0) return MOCK_SLEEP.score;
+    
+    // Multi-factor sleep score calculation:
+    // 1. Heart rate score (optimal: 50-70 BPM for sleep)
+    let hrScore = 100;
+    if (hr < 50 || hr > 100) {
+      hrScore = Math.max(0, 100 - Math.abs(hr - 65) * 1.5);
+    } else if (hr >= 50 && hr <= 70) {
+      hrScore = 100; // Optimal range
+    } else {
+      hrScore = Math.max(0, 100 - (hr - 70) * 2);
+    }
+    
+    // 2. Respiration score (optimal: 12-18 RPM)
+    let respScore = 100;
+    if (resp < 10 || resp > 24) {
+      respScore = Math.max(0, 100 - Math.abs(resp - 16) * 3);
+    } else if (resp >= 12 && resp <= 18) {
+      respScore = 100; // Optimal range
+    } else {
+      respScore = Math.max(0, 100 - Math.abs(resp - 16) * 2);
+    }
+    
+    // 3. Stress score (lower is better, 0-50 range)
+    let stressScore = 100;
+    if (stress > 0) {
+      stressScore = Math.max(0, 100 - stress * 1.5);
+    }
+    
+    // 4. HRV score (higher is generally better for sleep, but depends on baseline)
+    let hrvScore = 50; // Default neutral
+    if (hrv > 0) {
+      // HRV typically 300-1600ms, higher is better for recovery
+      if (hrv >= 500) {
+        hrvScore = 100;
+      } else if (hrv >= 300) {
+        hrvScore = 50 + ((hrv - 300) / 200) * 50; // Scale 300-500 to 50-100
+      } else {
+        hrvScore = (hrv / 300) * 50; // Scale 0-300 to 0-50
+      }
+    }
+    
+    // Weighted average: HR (30%), Respiration (30%), Stress (25%), HRV (15%)
+    const finalScore = (
+      hrScore * 0.30 +
+      respScore * 0.30 +
+      stressScore * 0.25 +
+      hrvScore * 0.15
+    );
+    
+    return Math.round(Math.max(0, Math.min(100, finalScore)));
+  }, [latestHealthData]);
+
   React.useEffect(() => {
     Animated.parallel([
       Animated.timing(progressAnim, {
-        toValue: MOCK_SLEEP.score / 100,
+        toValue: sleepScore / 100,
         duration: 1000,
         useNativeDriver: false,
       }),
       Animated.timing(scoreAnim, {
-        toValue: MOCK_SLEEP.score,
+        toValue: sleepScore,
         duration: 1000,
         useNativeDriver: false,
       }),
@@ -154,7 +469,7 @@ export default function HomeScreen() {
       setDisplayScore(Math.round(value));
     });
     return () => scoreAnim.removeListener(id);
-  }, [progressAnim, scoreAnim]);
+  }, [progressAnim, scoreAnim, sleepScore]);
 
   const strokeDashoffset = progressAnim.interpolate({
     inputRange: [0, 1],
@@ -172,50 +487,159 @@ export default function HomeScreen() {
     return (first + (second || '')).toUpperCase();
   }, [activeName, activeEmail]);
 
-  // Data for environment section
-   const baseMetrics = React.useMemo(
-     () => [
-       { key: 'temp', name: 'Temperature', value: '22.5', unit: '°C', icon: '🌡️', colors: ['#2B2E57', '#1B1E3D'] as const },
-       { key: 'hum', name: 'Humidity', value: '48', unit: '%', icon: '💧', colors: ['#24425F', '#18253A'] as const },
-       { key: 'press', name: 'Pressure', value: '1013', unit: 'hPa', icon: '🔽', colors: ['#2B3E56', '#172235'] as const },
-       { key: 'batt', name: 'Battery', value: '76', unit: '%', icon: '🔋', colors: ['#2A4A3E', '#153127'] as const },
-     ],
-     []
+  // Data for health section - 4 cards (using real data)
+   // CRITICAL: Include updateCounter in dependencies to force recomputation
+   const healthMetrics = React.useMemo(
+     () => {
+       const hr = latestHealthData?.heartRate || latestHealthData?.hr || 0;
+       const resp = latestHealthData?.respiration || latestHealthData?.resp || 0;
+       const stress = latestHealthData?.stress || 0;
+       
+       // Format stress level
+       let stressText = '--';
+       if (stress > 0) {
+         if (stress < 30) stressText = 'Low';
+         else if (stress < 60) stressText = 'Moderate';
+         else stressText = 'High';
+       }
+
+       // Calculate sleep duration (mock for now, could be calculated from historical data)
+       const sleepDuration = '--';
+
+       const metrics = [
+         { key: 'sleep', name: 'Sleep', value: sleepDuration, unit: '', icon: '😴', colors: ['#2B2E57', '#1B1E3D'] as const },
+         { key: 'heartRate', name: 'Heart Rate', value: hr > 0 ? String(Math.round(hr)) : '--', unit: 'BPM', icon: '❤️', colors: ['#2B2E57', '#1B1E3D'] as const },
+         { key: 'respiration', name: 'Respiration Rate', value: resp > 0 ? String(Math.round(resp)) : '--', unit: 'RPM', icon: '🌬️', colors: ['#24425F', '#18253A'] as const },
+         { key: 'stress', name: 'Stress', value: stressText, unit: '', icon: '😮‍💨', colors: ['#4A2B2B', '#1E1414'] as const },
+       ];
+       
+       // Debug log when metrics change
+       console.log('[Home] Health metrics updated:', {
+         heartRate: metrics[1].value,
+         respiration: metrics[2].value,
+         stress: metrics[3].value,
+         timestamp: latestHealthData?.timestamp,
+         updateCounter: updateCounter,
+       });
+       
+       return metrics;
+     },
+     [latestHealthData, updateCounter] // Include updateCounter to force recomputation
    );
 
-   const extraMetrics = React.useMemo(
-     () => [
-       { key: 'iaq', name: 'IAQ', value: '78', unit: '', icon: '🌬️', colors: ['#3A2C59', '#1D1430'] as const },
-       { key: 'bvoc', name: 'bVOC', value: '220', unit: 'ppb', icon: '🧪', colors: ['#2B3054', '#161A33'] as const },
-       { key: 'eco2', name: 'eCO₂', value: '650', unit: 'ppm', icon: '🫧', colors: ['#29334D', '#121A2A'] as const },
-       { key: 'tvoc', name: 'TVOC', value: '120', unit: 'ppb', icon: '☁️', colors: ['#2F2E4A', '#17162A'] as const },
-       { key: 'gas', name: 'Gas', value: '--', unit: '', icon: '🔥', colors: ['#2B2F3F', '#161925'] as const },
-     ],
-     []
+  // Data for environment section - only the specified cards (using real data)
+   // CRITICAL: Include updateCounter in dependencies to force recomputation
+   const envMetrics = React.useMemo(
+     () => {
+       const temp = latestHealthData?.temperature || latestHealthData?.temp || 0;
+       const hum = latestHealthData?.humidity || 0;
+       const iaq = latestHealthData?.iaq || 0;
+       const eco2 = latestHealthData?.eco2 || 0;
+       const tvoc = latestHealthData?.tvoc || 0;
+       const etoh = latestHealthData?.etoh || 0;
+
+       const metrics = [
+         { key: 'temp', name: 'Temperature', value: temp > 0 ? temp.toFixed(1) : '--', unit: '°C', icon: '🌡️', colors: ['#2B2E57', '#1B1E3D'] as const },
+         { key: 'hum', name: 'Humidity', value: hum > 0 ? String(Math.round(hum)) : '--', unit: '%', icon: '💧', colors: ['#24425F', '#18253A'] as const },
+         { key: 'iaq', name: 'IAQ', value: iaq > 0 ? String(Math.round(iaq)) : '--', unit: '', icon: '🌬️', colors: ['#3A2C59', '#1D1430'] as const },
+         { key: 'eco2', name: 'eCO₂', value: eco2 > 0 ? String(Math.round(eco2)) : '--', unit: 'ppm', icon: '🫧', colors: ['#29334D', '#121A2A'] as const },
+         { key: 'tvoc', name: 'TVOC', value: tvoc > 0 ? String(Math.round(tvoc)) : '--', unit: 'ppb', icon: '☁️', colors: ['#2F2E4A', '#17162A'] as const },
+         { key: 'etoh', name: 'ETOH', value: etoh > 0 ? etoh.toFixed(2) : '--', unit: 'ppb', icon: '🍷', colors: ['#2B2F3F', '#161925'] as const },
+       ];
+       
+       // Debug log when metrics change
+       console.log('[Home] Environment metrics updated:', {
+         temperature: metrics[0].value,
+         humidity: metrics[1].value,
+         iaq: metrics[2].value,
+         updateCounter: updateCounter,
+       });
+       
+       return metrics;
+     },
+     [latestHealthData, updateCounter] // Include updateCounter to force recomputation
    );
 
-  // pre-generate small sparkline points for each metric (for demo)
+  // Generate sparkline points from historical data
   const sparklines = React.useMemo(() => {
-    const all = [...baseMetrics, ...extraMetrics];
     const map: Record<string, { svgPoints: string; raw: number[] }> = {};
-    all.forEach((m) => {
-      map[m.key] = genSparklinePoints(120, 28, 12, 0, 100);
-    });
-    return map;
-  }, [baseMetrics, extraMetrics]);
+    
+    if (historicalData.length === 0) {
+      // Fallback to mock data if no historical data
+      [...healthMetrics, ...envMetrics].forEach((m) => {
+        map[m.key] = genSparklinePoints(120, 28, 12, 0, 100);
+      });
+      return map;
+    }
 
-  const onToggleEnv = () => {
-    // configure LayoutAnimation for smoother expand/collapse
-    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
-    setEnvExpanded((prev) => !prev);
-  };
+    // Map historical data to sparklines
+    const dataMap: Record<string, number[]> = {
+      heartRate: historicalData.map(d => d.heartRate || d.hr || 0).filter(v => v > 0),
+      respiration: historicalData.map(d => d.respiration || d.resp || 0).filter(v => v > 0),
+      stress: historicalData.map(d => d.stress || 0).filter(v => v > 0),
+      temp: historicalData.map(d => d.temperature || d.temp || 0).filter(v => v > 0),
+      hum: historicalData.map(d => d.humidity || 0).filter(v => v > 0),
+      iaq: historicalData.map(d => d.iaq || 0).filter(v => v > 0),
+      eco2: historicalData.map(d => d.eco2 || 0).filter(v => v > 0),
+      tvoc: historicalData.map(d => d.tvoc || 0).filter(v => v > 0),
+      etoh: historicalData.map(d => d.etoh || 0).filter(v => v > 0),
+    };
+
+    [...healthMetrics, ...envMetrics].forEach((m) => {
+      const values = dataMap[m.key] || [];
+      if (values.length > 0) {
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const range = max - min || 1;
+        const stepX = 120 / (values.length - 1 || 1);
+        const points = values.map((v, i) => {
+          const x = i * stepX;
+          const y = 28 - ((v - min) / range) * 28;
+          return `${x},${y}`;
+        });
+        map[m.key] = { svgPoints: points.join(' '), raw: values };
+      } else {
+        map[m.key] = genSparklinePoints(120, 28, 12, 0, 100);
+      }
+    });
+    
+    return map;
+  }, [healthMetrics, envMetrics, historicalData]);
+
 
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#02041A" />
       <LinearGradient colors={['#1D244D', '#02041A', '#1A1D3E']} style={styles.gradientBackground} />
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 100 }]} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 100 }]} 
+        showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={isLoadingData}
+            onRefresh={fetchDeviceData}
+            tintColor="#FFFFFF"
+          />
+        }
+      >
+        {/* Device status indicator */}
+        {activeDevice ? (
+          <View style={styles.deviceStatusBar}>
+            <Text style={styles.deviceStatusText}>
+              {isMQTTConnected() ? '🟢' : '🟡'} Device: {activeDevice.deviceId}
+              {isMQTTConnected() ? ' (MQTT Live)' : ' (HTTP Polling - MQTT WebSocket not available)'}
+              {lastUpdateTime && ` • Updated: ${lastUpdateTime.toLocaleTimeString()}`}
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.deviceStatusBar}>
+            <Text style={styles.deviceStatusText}>
+              ⚠️ No device connected. Add a device in Settings to see live data.
+            </Text>
+          </View>
+        )}
+
         {/* --- Sleep Card --- */}
         <View style={styles.card}>
           <View style={styles.cardHeader}>
@@ -272,37 +696,42 @@ export default function HomeScreen() {
             {MOCK_SLEEP.metrics.map((m) => (
               <View key={m.label} style={styles.metricItem}>
                 <Ionicons name={m.iconName as any} size={18} color="#C7D6FF" />
-                <Text style={styles.metricValue}>{m.value}</Text>
+                <Text key={`metric-${m.label}-${updateCounter}`} style={styles.metricValue}>{m.value}</Text>
                 <Text style={styles.metricLabel}>{m.label}</Text>
               </View>
             ))}
           </View>
         </View>
 
-        {/* --- Environment Data (NEW Grid + Sparklines) --- */}
+        {/* --- My Health Section (NEW Grid + Sparklines) --- */}
         <View style={styles.sectionHeaderRow}>
-          <Text style={styles.sectionTitle}>Environment Data</Text>
+          <Text style={styles.sectionTitle}>My Health</Text>
         </View>
 
         <View style={styles.envCard}>
           {/* container for grid */}
           <View style={styles.envGrid}>
             {(() => {
-              const items = isEnvExpanded ? [...baseMetrics, ...extraMetrics] : baseMetrics;
               // split into rows of 2 (flex: 1 ensures consistent widths; marginHorizontal provides gaps)
               const rows = [];
-              for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2));
+              for (let i = 0; i < healthMetrics.length; i += 2) rows.push(healthMetrics.slice(i, i + 2));
               return rows.map((pair, rowIndex) => (
-                <View key={`env-row-${rowIndex}`} style={styles.envRow}>
+                <View key={`health-row-${rowIndex}`} style={styles.envRow}>
                   {pair.map((m) => {
                     const spark = sparklines[m.key] || genSparklinePoints(120, 28, 12);
-                    const Container: any = m.key === 'temp' ? TouchableOpacity : View;
+                    const Container: any = m.key === 'sleep' || m.key === 'heartRate' || m.key === 'respiration' || m.key === 'stress' ? TouchableOpacity : View;
                     return (
                       <Container
                         key={m.key}
                         style={styles.envTile}
-                        {...(m.key === 'temp'
-                          ? { activeOpacity: 0.85, onPress: () => router.push('/charts/temperature') }
+                        {...(m.key === 'sleep'
+                          ? { activeOpacity: 0.85, onPress: () => router.push('/charts/sleep-insights') }
+                          : m.key === 'heartRate'
+                          ? { activeOpacity: 0.85, onPress: () => router.push('/charts/heart-rate-insights') }
+                          : m.key === 'respiration'
+                          ? { activeOpacity: 0.85, onPress: () => router.push('/charts/respiration-insights') }
+                          : m.key === 'stress'
+                          ? { activeOpacity: 0.85, onPress: () => router.push('/charts/stress-insights') }
                           : {})}
                       >
                         <LinearGradient colors={m.colors} style={styles.envTileBg} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
@@ -315,11 +744,90 @@ export default function HomeScreen() {
                               <Text style={styles.envName} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
                             </View>
                             {/* small status dot (color-coded) */}
-                            <View style={[styles.statusDot, { backgroundColor: m.key === 'batt' ? '#7EE3A1' : '#7EA6FF' }]} />
+                            <View style={[styles.statusDot, { backgroundColor: '#7EA6FF' }]} />
                           </View>
 
                           <View style={styles.envValueRow}>
-                            <Text style={styles.envValueNum}>{m.value}</Text>
+                            <Text key={`env-value-${m.key}-${updateCounter}`} style={styles.envValueNum}>{m.value}</Text>
+                            <Text style={styles.envUnit}>{m.unit ? ` ${m.unit}` : ''}</Text>
+                          </View>
+
+                          {/* mini chart - bar chart for sleep and stress, sparkline for others */}
+                          <View style={styles.sparklineWrap}>
+                            {m.key === 'sleep' ? (
+                              <MiniSleepChart width={120} height={32} />
+                            ) : m.key === 'stress' ? (
+                              <MiniStressChart width={120} height={32} />
+                            ) : (
+                              <Svg height={28} width={120}>
+                                {(() => {
+                                  const pts = spark.svgPoints.split(' ');
+                                  if (!pts.length) return null;
+                                  const d = `M ${pts[0]} L ${pts.slice(1).join(' L ')}`;
+                                  return (
+                                    <Path
+                                      d={d}
+                                      fill="none"
+                                      stroke="rgba(255,255,255,0.9)"
+                                      strokeWidth={2}
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      opacity={0.95}
+                                    />
+                                  );
+                                })()}
+                              </Svg>
+                            )}
+                          </View>
+                        </View>
+                      </Container>
+                    );
+                  })}
+
+                  {/* if only one item in row, render a spacer to keep layout stable */}
+                  {pair.length === 1 ? <View style={[styles.envTile, styles.emptyTile]} /> : null}
+                </View>
+              ));
+            })()}
+          </View>
+        </View>
+
+        {/* --- Environment Data (NEW Grid + Sparklines) --- */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>Environment Data</Text>
+        </View>
+
+        <View style={styles.envCard}>
+          {/* container for grid */}
+          <View style={styles.envGrid}>
+            {(() => {
+              // split into rows of 2 (flex: 1 ensures consistent widths; marginHorizontal provides gaps)
+              const rows = [];
+              for (let i = 0; i < envMetrics.length; i += 2) rows.push(envMetrics.slice(i, i + 2));
+              return rows.map((pair, rowIndex) => (
+                <View key={`env-row-${rowIndex}`} style={styles.envRow}>
+                  {pair.map((m) => {
+                    const spark = sparklines[m.key] || genSparklinePoints(120, 28, 12);
+                    return (
+                      <View
+                        key={m.key}
+                        style={styles.envTile}
+                      >
+                        <LinearGradient colors={m.colors} style={styles.envTileBg} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} />
+                        <View style={styles.envTileInner}>
+                          <View style={styles.envTopRow}>
+                            <View style={[styles.envIconWrap, { marginRight: 4 }]}>
+                              <Text style={styles.envIcon}>{m.icon}</Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.envName} numberOfLines={1} ellipsizeMode="tail">{m.name}</Text>
+                            </View>
+                            {/* small status dot (color-coded) */}
+                            <View style={[styles.statusDot, { backgroundColor: '#7EA6FF' }]} />
+                          </View>
+
+                          <View style={styles.envValueRow}>
+                            <Text key={`env-value-${m.key}-${updateCounter}`} style={styles.envValueNum}>{m.value}</Text>
                             <Text style={styles.envUnit}>{m.unit ? ` ${m.unit}` : ''}</Text>
                           </View>
 
@@ -345,100 +853,15 @@ export default function HomeScreen() {
                              </Svg>
                           </View>
                         </View>
-                      </Container>
+                      </View>
                     );
                   })}
 
-                  {/* if only one item in row and expanded, render a spacer to keep layout stable */}
+                  {/* if only one item in row, render a spacer to keep layout stable */}
                   {pair.length === 1 ? <View style={[styles.envTile, styles.emptyTile]} /> : null}
                 </View>
               ));
             })()}
-          </View>
-
-          <View style={styles.viewMoreBtnContainer}>
-            <LinearGradient colors={['#7EA6FF', 'rgba(126,166,255,0.4)']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.viewMoreGradient}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.viewMoreBtn}
-                onPress={onToggleEnv}
-              >
-                <Text style={styles.viewMoreText}>{isEnvExpanded ? 'View Less' : 'View More'}</Text>
-              </TouchableOpacity>
-            </LinearGradient>
-          </View>
-        </View>
-
-        {/* --- rest of screen --- */}
-        <Text style={[styles.sectionTitle, { marginTop: 18 }]}>My Health</Text>
-        <TouchableOpacity style={styles.listItem}>
-          <View style={styles.listIconTile}>
-            <LinearGradient colors={['#283048', '#859398']} style={styles.listIconBg} />
-          </View>
-          <Text style={styles.listTitle}>Sleep Scores</Text>
-          <Text style={styles.chevron}>›</Text>
-        </TouchableOpacity>
-
-        {/* --- Health Summary (Quick Stats) --- */}
-        <View style={styles.healthCard}>
-          {/* Heart Rate */}
-          <View style={styles.healthRow}>
-            <Text style={styles.healthLabel}>Heart Rate</Text>
-            <View style={styles.healthBar}>
-              <View style={styles.healthTrack} />
-              <View style={[styles.healthFill, { width: '60%', backgroundColor: '#7EA6FF' }]} />
-            </View>
-            <Text style={styles.healthValue}>66 BPM</Text>
-          </View>
-
-          {/* Respiration Rate */}
-          <View style={styles.healthRow}>
-            <Text style={styles.healthLabel}>Respiration Rate</Text>
-            <View style={styles.healthBar}>
-              <View style={styles.healthTrack} />
-              <View style={[styles.healthFill, { width: '40%', backgroundColor: '#BA8CFF' }]} />
-            </View>
-            <Text style={styles.healthValue}>16 RPM</Text>
-          </View>
-
-          {/* Sleep */}
-          <View style={styles.healthRow}>
-            <Text style={styles.healthLabel}>Sleep</Text>
-            <View style={styles.healthBar}>
-              <View style={styles.healthTrack} />
-              <View style={[styles.healthFill, { width: '70%', backgroundColor: '#7EE3A1' }]} />
-            </View>
-            <Text style={styles.healthValue}>8 HRS 24 MIN</Text>
-          </View>
-
-          {/* Stress (HRV) */}
-          <View style={styles.healthRow}>
-            <Text style={styles.healthLabel}>Stress (HRV)</Text>
-            <View style={styles.healthBar}>
-              <View style={styles.healthTrack} />
-              <View style={[styles.healthFill, { width: '50%', backgroundColor: '#FFA76B' }]} />
-            </View>
-            <Text style={styles.healthValue}>Moderate (60)</Text>
-          </View>
-
-          {/* Environment */}
-          <View style={styles.healthRow}>
-            <Text style={styles.healthLabel}>Environment</Text>
-            <View style={styles.healthBar}>
-              <View style={styles.healthTrack} />
-              <View style={[styles.healthFill, { width: '65%', backgroundColor: '#7EE3A1' }]} />
-            </View>
-            <Text style={styles.healthValue}>Moderate</Text>
-          </View>
-
-          {/* Wakeup Feel */}
-          <View style={styles.healthRow}>
-            <Text style={styles.healthLabel}>Wakeup Feel</Text>
-            <View style={styles.healthBar}>
-              <View style={styles.healthTrack} />
-              <View style={[styles.healthFill, { width: '85%', backgroundColor: '#7EA6FF' }]} />
-            </View>
-            <Text style={styles.healthValue}>Great</Text>
           </View>
         </View>
 
@@ -643,25 +1066,6 @@ const styles = StyleSheet.create({
   sparklineWrap: { marginTop: 8, alignItems: 'flex-start' },
   statusDot: { width: 10, height: 10, borderRadius: 6, marginLeft: 8 },
 
-  viewMoreBtnContainer: { marginTop: 6 },
-  viewMoreGradient: {
-    borderRadius: 12,
-    padding: 2,
-    shadowColor: '#7EA6FF',
-    shadowOpacity: 0.22,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-  },
-  viewMoreBtn: {
-    backgroundColor: 'rgba(2,4,26,0.9)',
-    paddingVertical: 10,
-    borderRadius: 10,
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    paddingHorizontal: 14,
-  },
-  viewMoreText: { color: '#FFFFFF', fontWeight: '800', marginRight: 8 },
   chevWrap: { marginLeft: 6 },
   chev: { color: '#C7D6FF', fontSize: 16 },
 
@@ -760,4 +1164,19 @@ const styles = StyleSheet.create({
   addAccountText: { color: '#C7B9FF', fontWeight: '800' },
   manageDeviceRow: { paddingVertical: 10 },
   manageDeviceText: { color: 'rgba(255,255,255,0.8)' },
+  
+  // Device status bar
+  deviceStatusBar: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  deviceStatusText: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 12,
+    textAlign: 'center',
+  },
 });

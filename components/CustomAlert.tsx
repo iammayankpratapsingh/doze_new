@@ -18,13 +18,13 @@ interface CustomAlertProps {
 }
 
 const CustomAlert: React.FC<CustomAlertProps> = ({ visible, title, message, buttons, onClose }) => {
-  if (!visible) return null;
-
   // Default single OK button if no buttons provided
   const alertButtons = buttons || [
     {
       text: 'OK',
-      onPress: onClose || (() => {}),
+      onPress: () => {
+        if (onClose) onClose();
+      },
       style: 'primary' as const
     }
   ];

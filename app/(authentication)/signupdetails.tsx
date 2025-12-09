@@ -158,7 +158,14 @@ export default function SignUpDetailsScreen() {
         <Text style={styles.subtitle}>Enter your details to register</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView 
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={true}
+        keyboardShouldPersistTaps="handled"
+        bounces={true}
+        scrollEnabled={true}
+      >
         <CustomInput icon="mail-outline" placeholder="Email" value={email} onChangeText={setEmail} keyboardType="email-address" />
         {errors.email && <Text style={styles.errorText}>{errors.email}</Text>}
 
@@ -200,6 +207,13 @@ export default function SignUpDetailsScreen() {
         <TouchableOpacity style={styles.registerButton} onPress={handleRegister} disabled={loading}>
           {loading ? <ActivityIndicator color="#1D244D" /> : <Text style={styles.registerButtonText}>Register</Text>}
         </TouchableOpacity>
+
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>Already have an account? </Text>
+          <TouchableOpacity onPress={() => router.push('/(authentication)/signin')}>
+            <Text style={[styles.footerText, styles.footerLink]}>Log In</Text>
+          </TouchableOpacity>
+        </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -212,7 +226,14 @@ const styles = StyleSheet.create({
   backButton: { position: 'absolute', top: Platform.OS === 'ios' ? 60 : 40, left: 20,  marginTop: Platform.OS === 'ios' ? 10 : 15, zIndex: 1 },
   title: { fontSize: 28, fontWeight: 'bold', color: '#FFFFFF', textAlign: 'center', marginBottom: 10 },
   subtitle: { fontSize: 16, color: 'rgba(255, 255, 255, 0.7)', textAlign: 'center' },
-  scrollContent: { paddingHorizontal: 20, paddingBottom: 40 },
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: { 
+    paddingHorizontal: 20, 
+    paddingTop: 10,
+    paddingBottom: 120,
+  },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -252,4 +273,22 @@ const styles = StyleSheet.create({
   },
   registerButtonText: { color: '#1D244D', fontSize: 18, fontWeight: 'bold' },
   errorText: { color: '#FF5A5F', fontSize: 12, paddingLeft: 15, paddingTop: 4 },
+  footer: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 24,
+    marginBottom: 20,
+    paddingVertical: 12,
+  },
+  footerText: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 15,
+  },
+  footerLink: {
+    fontWeight: 'bold',
+    color: '#7EA6FF',
+    textDecorationLine: 'underline',
+    marginLeft: 4,
+  },
 });

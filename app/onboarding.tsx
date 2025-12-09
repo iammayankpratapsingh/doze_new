@@ -32,8 +32,8 @@ const SLIDES: Slide[] = [
   {
     id: 'place',
     title: 'Perfect placement',
-    subtitle: 'Place the sensor under the mattress near the chest area.',
-    imageRequire: require('../assets/image3.jpg'),
+    subtitle: 'Place the sensor under or over the mattress near the chest area.',
+    imageRequire: require('../assets/image3.png'),
   },
   {
     id: 'wifi',

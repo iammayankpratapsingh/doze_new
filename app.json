@@ -10,14 +10,14 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.slimiot.dozemate"
+      "bundleIdentifier": "com.slimiot.dozemate1"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "package": "com.slimiot.dozemate",
+      "package": "com.slimiot.dozemate1",
       "backgroundColor": "#02041A",
       "edgeToEdgeEnabled": true,
       "permissions": [

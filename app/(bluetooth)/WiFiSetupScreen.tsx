@@ -7,7 +7,7 @@ import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Location from "expo-location";
 import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Keyboard,
@@ -48,6 +48,9 @@ export default function WiFiSetupScreen() {
   const [showNetworkPicker, setShowNetworkPicker] = useState(false);
   const [availableNetworks, setAvailableNetworks] = useState<ScannedNetwork[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  
+  // Ref to track if we've already shown the disconnection alert
+  const hasShownDisconnectAlert = useRef(false);
 
   // Monitor device connection status
   useEffect(() => {
@@ -58,6 +61,8 @@ export default function WiFiSetupScreen() {
     switch (connectionStatus) {
       case 'connected':
         setConnectionStatusText('Connected');
+        // Reset the alert flag when reconnected
+        hasShownDisconnectAlert.current = false;
         break;
       case 'connecting':
         setConnectionStatusText('Connecting...');
@@ -72,9 +77,10 @@ export default function WiFiSetupScreen() {
         setConnectionStatusText('Unknown');
     }
 
-    // Handle disconnection
-    if (connectionStatus === 'disconnected' && !showAlert) {
+    // Handle disconnection - only show alert once per disconnection event
+    if (connectionStatus === 'disconnected' && !hasShownDisconnectAlert.current) {
       console.log('⚠️ Device disconnected in WiFiSetupScreen');
+      hasShownDisconnectAlert.current = true;
       
       setAlertTitle("Device Disconnected");
       setAlertMessage(
@@ -88,15 +94,21 @@ export default function WiFiSetupScreen() {
         {
           text: "Back to Scan",
           onPress: () => {
+            // Close alert first
             setShowAlert(false);
-            router.replace("/(bluetooth)/ScanScreen");
+            // Reset the flag
+            hasShownDisconnectAlert.current = false;
+            // Use setTimeout to ensure modal closes before navigation
+            setTimeout(() => {
+              router.replace("/(bluetooth)/ScanScreen");
+            }, 300);
           },
           style: 'primary'
         }
       ]);
       setShowAlert(true);
     }
-  }, [connectionStatus, connectedDevice, selectedDevice, showAlert, router]);
+  }, [connectionStatus, connectedDevice, selectedDevice, router]);
 
   const checkLocationPermission = async (): Promise<boolean> => {
     try {
@@ -578,7 +590,11 @@ export default function WiFiSetupScreen() {
           title={alertTitle}
           message={alertMessage}
           buttons={alertButtons}
-          onClose={() => setShowAlert(false)}
+          onClose={() => {
+            setShowAlert(false);
+            // Reset the flag when alert is closed
+            hasShownDisconnectAlert.current = false;
+          }}
         />
 
         {/* Network Picker Modal */}

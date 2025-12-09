@@ -22,13 +22,13 @@ export const ProvisioningProvider = ({ children }: { children: ReactNode }) => {
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
 
-  // UUIDs matching your Nordic firmware (nRF52832)
-  // Service UUID: 5678DEF0 (short) = 5678DEF0-5678-1234-1234-56789ABC0000 (full)
-  // Credentials characteristic: 5678DEF1 (short) = 5678DEF1-5678-1234-1234-56789ABC0000 (full)
-  // Status characteristic: 5678DEF2 (short) = 5678DEF2-5678-1234-1234-56789ABC0000 (full)
-  const PROVISION_SERVICE_UUID = "5678DEF0-5678-1234-1234-56789ABC0000";
-  const WIFI_CHAR_UUID = "5678DEF1-5678-1234-1234-56789ABC0000";  // Changed from DEF0...0001 to DEF1...0000
-  const STATUS_CHAR_UUID = "5678DEF2-5678-1234-1234-56789ABC0000";  // For future use
+  // UUIDs matching Nordic UART Service (nRF52832)
+  // Service UUID: Nordic UART Service = 6E400001-B5A3-F393-E0A9-E50E24DCCA9E
+  // RX Characteristic (App writes to device): 6e400002-b5a3-f393-e0a9-e50e24dcca9e
+  // TX Characteristic (Device writes to app): 6E400003-B5A3-F393-E0A9-E50E24DCCA9E (for status)
+  const PROVISION_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
+  const WIFI_CHAR_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";  // RX characteristic for WiFi credentials
+  const STATUS_CHAR_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  // TX characteristic for status updates
 
   const handleSetSelectedDevice = (device: Device | null) => {
     setSelectedDevice(device);
@@ -85,20 +85,17 @@ export const ProvisioningProvider = ({ children }: { children: ReactNode }) => {
       }
       console.log("WiFi credential characteristic found!");
 
-      // Step 5: Build the JSON payload matching the firmware format
-      const creds = JSON.stringify({
-        ssid: wifiSSID,
-        password: wifiPassword,
-      });
+      // Step 5: Build plain text payload in comma-separated format (ssid,password)
+      const creds = `${wifiSSID},${wifiPassword}`;
 
-      console.log(`WiFi credentials payload: ${creds}`);
-
-      // Step 6: Convert to base64 as expected by BLE
-      const base64Creds = Buffer.from(creds).toString("base64");
+      console.log(`WiFi credentials payload (plain text): ${creds}`);
       
-      console.log(`Writing ${base64Creds.length} bytes to characteristic...`);
+      // Step 6: Convert to base64 as react-native-ble-plx expects base64 encoded string
+      const base64Creds = Buffer.from(creds, 'utf-8').toString('base64');
+      console.log(`WiFi credentials payload (base64): ${base64Creds}`);
+      console.log(`Writing ${creds.length} bytes (${base64Creds.length} base64 chars) to characteristic...`);
 
-      // Step 7: Write the credentials
+      // Step 7: Write the base64 encoded credentials (library expects base64)
       await bleManager.writeCharacteristicWithResponseForDevice(
         selectedDeviceId,
         PROVISION_SERVICE_UUID,
