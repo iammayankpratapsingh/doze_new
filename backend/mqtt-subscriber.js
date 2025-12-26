@@ -1,7 +1,5 @@
 require('dotenv').config();
 const mqtt = require('mqtt');
-const fs = require('fs');
-const path = require('path');
 
 // Configuration from .env file
 const MQTT_BROKER_URL = process.env.MQTT_BROKER_URL || 'mqtt://172.236.188.162:1883';
@@ -15,25 +13,13 @@ const SUBSCRIBE_TO_ALL = DEVICE_ID_ARG === 'all' || DEVICE_ID_ARG === '+';
 const DEVICE_ID = SUBSCRIBE_TO_ALL ? 'ALL' : (DEVICE_ID_ARG || '3BCE9E1BFA48CF12');
 const TOPIC_PATTERN = SUBSCRIBE_TO_ALL ? 'device/+/data' : `device/${DEVICE_ID}/data`;
 
-// Log file configuration
-const LOG_DIR = path.join(__dirname, 'logs');
-const LOG_FILE = path.join(LOG_DIR, `mqtt-device-${DEVICE_ID}-${Date.now()}.log`);
-
-// Ensure logs directory exists
-if (!fs.existsSync(LOG_DIR)) {
-  fs.mkdirSync(LOG_DIR, { recursive: true });
-}
-
-// Helper function to write to log file
+// Helper function to write logs (console only; no file is created)
 function writeToLog(message) {
   const timestamp = new Date().toISOString();
   const logMessage = `[${timestamp}] ${message}\n`;
   
   // Write to console
   console.log(logMessage.trim());
-  
-  // Write to file
-  fs.appendFileSync(LOG_FILE, logMessage, 'utf8');
 }
 
 // Helper function to format JSON nicely
@@ -64,7 +50,6 @@ if (SUBSCRIBE_TO_ALL) {
 } else {
   console.log(`   (Device ID: ${DEVICE_ID})`);
 }
-console.log(`📝 Log File: ${LOG_FILE}`);
 console.log('═══════════════════════════════════════════════════════════════');
 console.log('');
 
@@ -203,7 +188,6 @@ process.on('SIGINT', () => {
   writeToLog('');
   writeToLog('═══════════════════════════════════════════════════════════════');
   writeToLog('🛑 Shutting down MQTT subscriber...');
-  writeToLog(`📝 Log file saved at: ${LOG_FILE}`);
   writeToLog('═══════════════════════════════════════════════════════════════');
   
   if (client) {
@@ -219,7 +203,6 @@ process.on('SIGTERM', () => {
   writeToLog('');
   writeToLog('═══════════════════════════════════════════════════════════════');
   writeToLog('🛑 Shutting down MQTT subscriber...');
-  writeToLog(`📝 Log file saved at: ${LOG_FILE}`);
   writeToLog('═══════════════════════════════════════════════════════════════');
   
   if (client) {

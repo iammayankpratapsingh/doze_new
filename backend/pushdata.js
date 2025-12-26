@@ -5,7 +5,7 @@ require('dotenv').config();
 const API_URL = process.env.API_BASE_URL || process.env.APP_BASE_URL || 'http://localhost:5000';
 const API_ENDPOINT = '/api/http/ingest';
 const API_KEY = '7f9c2c9f1a3b9d0e7a6c1b2d8e4f9a7c3d5e6b8a9c1d2e3f4a5b6c7d8e9f0a';
-const DEVICE_ID = '77089FB890EAA298';
+const DEVICE_ID = '3BCE9E1BFA48CF12';
 const JWT_TOKEN = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI2OTNkMzExMmMzZGJiNTdmYTU5ZTFjY2YiLCJyb2xlIjoiYWRtaW4iLCJpYXQiOjE3NjYzOTkwOTIsImV4cCI6MTc2ODk5MTA5Mn0.frfopfvgJiA6YBWc-ojLliYua79YAfraCuBFyZZiAk4';
 
 // Note: API key validation is optional if DOZEMATE_API_KEY is not set in server .env

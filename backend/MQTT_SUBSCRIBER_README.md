@@ -50,8 +50,7 @@ node mqtt-subscriber.js all
 
 The script will:
 1. **Display messages in console** with formatted JSON and timestamps
-2. **Save logs to file** in `backend/logs/` directory
-   - Format: `mqtt-device-{DEVICE_ID}-{timestamp}.log`
+2. **(Console-only)** It does not write any log files to disk.
 
 ## Logged Information
 

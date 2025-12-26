@@ -1,9 +1,6 @@
 // utils/dlog.js
-const fs = require('fs');
-const path = require('path');
-
-// One flat file. Change via env if you want.
-const LOG_FILE = process.env.DEBUG_LOG_FILE || path.join(process.cwd(), 'debug.log');
+// Console-only debug logger (no file is created / written).
+const LOG_FILE = null;
 
 function fmt(v) {
   try { return typeof v === 'string' ? v : JSON.stringify(v); }
@@ -12,13 +9,13 @@ function fmt(v) {
 
 function log(msg, meta) {
   const line = `[${new Date().toISOString()}] ${msg}${meta !== undefined ? ' ' + fmt(meta) : ''}\n`;
-  fs.appendFile(LOG_FILE, line, () => {});
-  // also echo to console so you see it in dev
-  console.log('[DBG]', msg, meta ?? '');
+  // Keep behavior visible in dev, but do not write to disk.
+  console.log('[DBG]', line.trim());
+  if (meta !== undefined) console.log('[DBG_META]', meta);
 }
 
 function clear() {
-  try { fs.writeFileSync(LOG_FILE, ''); } catch {}
+  // no-op (no file to clear)
 }
 
 module.exports = Object.assign(log, { file: LOG_FILE, clear });
