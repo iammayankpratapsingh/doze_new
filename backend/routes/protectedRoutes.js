@@ -382,6 +382,242 @@ router.get("/data/history/:deviceId", authMiddleware, async (req, res) => {
     }
 });
 
+// ✅ Get weekly aggregated heart rate data (7 days, one per day)
+router.get("/data/health/weekly/:deviceId", authMiddleware, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const { weekStart } = req.query; // Optional: ISO date string for week start (defaults to current week)
+
+        // Calculate week boundaries (Monday to Sunday)
+        let weekStartDate;
+        if (weekStart) {
+            const inputDate = new Date(weekStart);
+            const day = inputDate.getDay();
+            const diff = inputDate.getDate() - day + (day === 0 ? -6 : 1); // Adjust when day is Sunday
+            weekStartDate = new Date(inputDate);
+            weekStartDate.setDate(diff);
+        } else {
+            // Default to current week (Monday)
+            const now = new Date();
+            const day = now.getDay();
+            const diff = now.getDate() - day + (day === 0 ? -6 : 1);
+            weekStartDate = new Date(now);
+            weekStartDate.setDate(diff);
+        }
+
+        // Set to start of Monday (00:00:00)
+        weekStartDate.setHours(0, 0, 0, 0);
+        
+        // Calculate week end (Sunday 23:59:59)
+        const weekEndDate = new Date(weekStartDate);
+        weekEndDate.setDate(weekEndDate.getDate() + 6);
+        weekEndDate.setHours(23, 59, 59, 999);
+
+        // Today's date for isPartial flag
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        console.log(`[WeeklyHeartRate] Fetching weekly data for ${deviceId} from ${weekStartDate} to ${weekEndDate}`);
+
+        // Generate array of 7 days (Mon-Sun)
+        const weekData = [];
+        const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+        for (let i = 0; i < 7; i++) {
+            const dayStart = new Date(weekStartDate);
+            dayStart.setDate(dayStart.getDate() + i);
+            dayStart.setHours(0, 0, 0, 0);
+
+            const dayEnd = new Date(dayStart);
+            dayEnd.setHours(23, 59, 59, 999);
+
+            // Check if this is today (for isPartial flag)
+            const isToday = dayStart.getTime() === today.getTime();
+            const isPartial = isToday && new Date() < dayEnd;
+
+            // Aggregate heart rate data for this day
+            const dayData = await HealthData.aggregate([
+                {
+                    $match: {
+                        deviceId: deviceId,
+                        timestamp: { $gte: dayStart, $lte: dayEnd },
+                        $or: [
+                            { heartRate: { $gt: 0 } },
+                            { hr: { $gt: 0 } }
+                        ]
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        avg: {
+                            $avg: {
+                                $ifNull: ["$heartRate", "$hr"]
+                            }
+                        },
+                        min: {
+                            $min: {
+                                $ifNull: ["$heartRate", "$hr"]
+                            }
+                        },
+                        max: {
+                            $max: {
+                                $ifNull: ["$heartRate", "$hr"]
+                            }
+                        },
+                        count: { $sum: 1 }
+                    }
+                }
+            ]);
+
+            const result = dayData[0] || null;
+
+            weekData.push({
+                day: dayNames[i],
+                dayIndex: i,
+                date: dayStart.toISOString().split('T')[0], // YYYY-MM-DD
+                avg: result ? Math.round(result.avg * 10) / 10 : null, // Round to 1 decimal
+                min: result ? Math.round(result.min) : null,
+                max: result ? Math.round(result.max) : null,
+                isPartial: isPartial,
+                count: result ? result.count : 0
+            });
+        }
+
+        res.json({
+            success: true,
+            deviceId,
+            weekStart: weekStartDate.toISOString(),
+            weekEnd: weekEndDate.toISOString(),
+            data: weekData
+        });
+
+    } catch (error) {
+        console.error("Error fetching weekly heart rate data:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Server error",
+            error: error.message 
+        });
+    }
+});
+
+// ✅ Get monthly aggregated heart rate data (30 days, one per day)
+router.get("/data/health/monthly/:deviceId", authMiddleware, async (req, res) => {
+    try {
+        const { deviceId } = req.params;
+        const { monthStart } = req.query; // Optional: ISO date string for month start (defaults to current month)
+
+        // Calculate month boundaries (first day to last day of month)
+        let monthStartDate;
+        if (monthStart) {
+            monthStartDate = new Date(monthStart);
+            monthStartDate.setDate(1); // First day of month
+        } else {
+            // Default to current month
+            const now = new Date();
+            monthStartDate = new Date(now.getFullYear(), now.getMonth(), 1);
+        }
+
+        // Set to start of first day (00:00:00)
+        monthStartDate.setHours(0, 0, 0, 0);
+        
+        // Calculate month end (last day of month 23:59:59)
+        const monthEndDate = new Date(monthStartDate.getFullYear(), monthStartDate.getMonth() + 1, 0);
+        monthEndDate.setHours(23, 59, 59, 999);
+
+        // Get number of days in month
+        const daysInMonth = monthEndDate.getDate();
+
+        // Today's date for isPartial flag
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        console.log(`[MonthlyHeartRate] Fetching monthly data for ${deviceId} from ${monthStartDate} to ${monthEndDate} (${daysInMonth} days)`);
+
+        // Generate array of days in month
+        const monthData = [];
+
+        for (let i = 0; i < daysInMonth; i++) {
+            const dayStart = new Date(monthStartDate);
+            dayStart.setDate(dayStart.getDate() + i);
+            dayStart.setHours(0, 0, 0, 0);
+
+            const dayEnd = new Date(dayStart);
+            dayEnd.setHours(23, 59, 59, 999);
+
+            // Check if this is today (for isPartial flag)
+            const isToday = dayStart.getTime() === today.getTime();
+            const isPartial = isToday && new Date() < dayEnd;
+
+            // Aggregate heart rate data for this day
+            const dayData = await HealthData.aggregate([
+                {
+                    $match: {
+                        deviceId: deviceId,
+                        timestamp: { $gte: dayStart, $lte: dayEnd },
+                        $or: [
+                            { heartRate: { $gt: 0 } },
+                            { hr: { $gt: 0 } }
+                        ]
+                    }
+                },
+                {
+                    $group: {
+                        _id: null,
+                        avg: {
+                            $avg: {
+                                $ifNull: ["$heartRate", "$hr"]
+                            }
+                        },
+                        min: {
+                            $min: {
+                                $ifNull: ["$heartRate", "$hr"]
+                            }
+                        },
+                        max: {
+                            $max: {
+                                $ifNull: ["$heartRate", "$hr"]
+                            }
+                        },
+                        count: { $sum: 1 }
+                    }
+                }
+            ]);
+
+            const result = dayData[0] || null;
+
+            monthData.push({
+                day: i + 1, // Day of month (1-31)
+                dayIndex: i, // Index (0-30)
+                date: dayStart.toISOString().split('T')[0], // YYYY-MM-DD
+                avg: result ? Math.round(result.avg * 10) / 10 : null, // Round to 1 decimal
+                min: result ? Math.round(result.min) : null,
+                max: result ? Math.round(result.max) : null,
+                isPartial: isPartial,
+                count: result ? result.count : 0
+            });
+        }
+
+        res.json({
+            success: true,
+            deviceId,
+            monthStart: monthStartDate.toISOString(),
+            monthEnd: monthEndDate.toISOString(),
+            daysInMonth: daysInMonth,
+            data: monthData
+        });
+
+    } catch (error) {
+        console.error("Error fetching monthly heart rate data:", error);
+        res.status(500).json({ 
+            success: false,
+            message: "Server error",
+            error: error.message 
+        });
+    }
+});
+
 // ✅ Get raw health data for a specific device (no averaging/preprocessing)
 router.get("/data/health/raw/:deviceId", authMiddleware, async (req, res) => {
     try {
